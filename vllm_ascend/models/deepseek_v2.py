@@ -25,7 +25,7 @@
 # # vllm-project/vllm/vllm/model_executor/models/deepseek_v2.py
 # """Inference-only DeepseekV2/DeepseekV3 model."""
 
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch_npu
@@ -312,11 +312,6 @@ class CustomDeepseekV2MoE(nn.Module):
             enable_force_load_balance = False
             if hasattr(attn_metadata, 'with_prefill_across_dp'):
                 is_prefill = is_prefill or attn_metadata.with_prefill_across_dp
-        # If this node is kv_consumer, we force the moe always runs in decode path to make sure
-        # the behaviour aligned between dummy_run and normal model_execute.
-        if self.kv_consumer is not None:
-            is_prefill = False
-            enable_force_load_balance = False
 
         # router_logits: (num_tokens, n_experts)
         router_logits, _ = self.gate(hidden_states)

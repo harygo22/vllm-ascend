@@ -653,19 +653,20 @@ class AscendMLAImpl(MLAAttentionImpl):
         self.W_UV = W_UV.transpose(0, 1).contiguous()
         # Convert from (L, N, P) to (N, P, L)
         self.W_UK_T = W_UK.permute(1, 2, 0).contiguous()
-        self.W_UV.data = torch_npu.npu_format_cast(self.W_UV.data, 29)
-        self.W_UK_T.data = torch_npu.npu_format_cast(self.W_UK_T.data, 29)
+
+        # Waiting for BMM NZ support
+        # self.W_UV.data = torch_npu.npu_format_cast(self.W_UV.data, 29)
+        # self.W_UK_T.data = torch_npu.npu_format_cast(self.W_UK_T.data, 29)
 
     def _compute_prefill_context(
         self,
         query: torch.Tensor,
-        kv_c_and_k_pe_cache: Tuple[torch.Tensor],
+        kv_c_and_k_pe_cache: torch.Tensor,
         rope_dim: int,
         attn_metadata: AscendMLAMetadata,
         prefix_output: torch.Tensor,
         prefix_lse: torch.Tensor,
     ):
-        assert len(kv_c_and_k_pe_cache) > 1
         prefill_metadata = attn_metadata.prefill
         if prefill_metadata is None or prefill_metadata.chunked_context is None:
             return prefix_output, prefix_lse
@@ -675,22 +676,21 @@ class AscendMLAImpl(MLAAttentionImpl):
         q_nope = query[..., :self.qk_nope_head_dim]
 
         seq_len1 = torch.tensor(prefill_metadata.query_lens, dtype=torch.int32)
-        cache_kv_c = kv_c_and_k_pe_cache[0]
-        cache_k_pe = kv_c_and_k_pe_cache[1]
-        num_heads = cache_k_pe.size(2)
-        latent_kv_dim = kv_c_and_k_pe_cache[0].size(-1)
+        latent_kv_dim = kv_c_and_k_pe_cache.size(3) - rope_dim
+        cache_kv_c = kv_c_and_k_pe_cache[:, :, :, :latent_kv_dim]
+        cache_k_pe = kv_c_and_k_pe_cache[:, :, :, latent_kv_dim:]
         for i in range(iters):
             toks = prefill_metadata.chunked_context.seq_tot[i]
 
             seq_len2 = prefill_metadata.chunked_context.chunk_seq_lens[i]
             seq_len = torch.stack([seq_len1, seq_len2])
             kv_c_normed = torch.empty(toks,
-                                      num_heads,
+                                      kv_c_and_k_pe_cache.size(2),
                                       latent_kv_dim,
                                       dtype=query.dtype,
                                       device=query.device)
             k_pe = torch.empty(toks,
-                               num_heads,
+                               kv_c_and_k_pe_cache.size(2),
                                rope_dim,
                                dtype=query.dtype,
                                device=query.device)
@@ -1076,7 +1076,7 @@ class AscendMLAImpl(MLAAttentionImpl):
             decode_k_nope = None
             assert attn_metadata.decode is not None
             if self.running_in_graph:
-                seq_len = self.rotary_emb.max_position_embeddings
+                seq_len = self.rotary_emb.max_position_embeddings * self.rotary_emb.scaling_factor
                 cos = self.rotary_emb.cos_cached[:seq_len].to(
                     dtype=decode_hs_or_q_c.dtype)
                 sin = self.rotary_emb.sin_cached[:seq_len].to(
@@ -1121,7 +1121,7 @@ class AscendMLAImpl(MLAAttentionImpl):
             prefill_q_nope = prefill_q[..., :self.qk_nope_head_dim]
             if self.torchair_graph_enabled:
                 num_tokens = prefill_hs_or_q_c.shape[0]
-                seq_len = self.rotary_emb.max_position_embeddings
+                seq_len = self.rotary_emb.max_position_embeddings * self.rotary_emb.scaling_factor
                 cos = self.rotary_emb.cos_cached[:seq_len].to(
                     dtype=prefill_q_pe.dtype)
                 sin = self.rotary_emb.sin_cached[:seq_len].to(

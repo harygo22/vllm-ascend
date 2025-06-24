@@ -75,9 +75,6 @@ class NPUWorker(WorkerBase):
                          is_driver_worker=is_driver_worker)
 
         # Try to import mindie_turbo to accelerate vLLM inference.
-        local_dp_rank = self.vllm_config.parallel_config.data_parallel_rank_local
-        world_size = self.vllm_config.parallel_config.world_size
-        self.local_rank_across_dp = local_dp_rank * world_size + self.local_rank
         try_register_lib(
             "mindie_turbo",
             "MindIE Turbo is installed. vLLM inference will be accelerated with MindIE Turbo."
@@ -251,10 +248,9 @@ class NPUWorker(WorkerBase):
         runner = self.model_runner
         max_num_tokens = 1
         with_prefill = False
-        enable_dbo = False
         if runner.dp_size > 1:
-            max_num_tokens, with_prefill, _ = runner._get_forward_metadata_across_dp(
-                max_num_tokens, with_prefill, enable_dbo)
+            max_num_tokens, with_prefill = runner._get_forward_metadata_across_dp(
+                max_num_tokens, with_prefill)
         if runner.torchair_graph_enabled and not with_prefill:
             max_num_tokens = runner.select_torchair_padded_batch_size(
                 max_num_tokens)
